@@ -17,13 +17,19 @@ class ProjectileComponent extends PositionComponent
     double speed = 250.0,
     double splashRadius = 0.0,
     Color? color,
+    SpriteAnimation? spriteAnimation,
   })  : _target = target,
         _damage = damage,
         _speed = speed,
         _splashRadius = splashRadius,
-        _color = color ?? GameConstants.colorProjectile {
+        _color = color ?? GameConstants.colorProjectile,
+        _spriteAnimation = spriteAnimation {
     position = startPosition.clone();
-    size = Vector2.all(GameConstants.projectileRadius * 2);
+    // Sprite projectiles are rendered larger than the plain circle.
+    final visualSize = spriteAnimation != null
+        ? GameConstants.projectileRadius * 6
+        : GameConstants.projectileRadius * 2;
+    size = Vector2.all(visualSize);
     priority = 20;
   }
 
@@ -32,6 +38,7 @@ class ProjectileComponent extends PositionComponent
   final double _speed;
   final double _splashRadius;
   final Color _color;
+  final SpriteAnimation? _spriteAnimation;
 
   // Explosion animation state (bomb only)
   bool _isExploding = false;
@@ -42,6 +49,18 @@ class ProjectileComponent extends PositionComponent
   late final Paint _glowPaint = Paint()
     ..color = _color.withAlpha(80)
     ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4);
+
+  @override
+  Future<void> onLoad() async {
+    if (_spriteAnimation != null) {
+      add(SpriteAnimationComponent(
+        animation: _spriteAnimation,
+        size: size.clone(),
+        anchor: Anchor.center,
+        position: size / 2,
+      ));
+    }
+  }
 
   @override
   void update(double dt) {
@@ -79,7 +98,6 @@ class ProjectileComponent extends PositionComponent
       }
       AudioService.instance.playSfx(SoundType.sfxExplosion);
       _isExploding = true;
-      // Enlarge component to show explosion ring
       size = Vector2.all(_splashRadius * 2);
       position = impactPos - size / 2;
     } else {
@@ -94,6 +112,9 @@ class ProjectileComponent extends PositionComponent
       _renderExplosion(canvas);
       return;
     }
+
+    // Sprite child handles rendering for cannon projectiles.
+    if (_spriteAnimation != null) return;
 
     final r = GameConstants.projectileRadius;
     canvas.drawCircle(Offset(r, r), r * 1.8, _glowPaint);

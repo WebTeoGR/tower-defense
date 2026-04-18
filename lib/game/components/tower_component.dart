@@ -18,7 +18,9 @@ class TowerComponent extends PositionComponent
     required double tileSize,
     required this.towerType,
   }) {
-    size = Vector2(tileSize * 0.8, tileSize * 0.8);
+    // Cannon gets a larger footprint than the canvas-drawn towers.
+    final scale = towerType == TowerType.basic ? 1.1 : 0.8;
+    size = Vector2.all(tileSize * scale);
     position = Vector2(
       (gridCol * tileSize) + (tileSize - size.x) / 2,
       (gridRow * tileSize) + (tileSize - size.y) / 2,
@@ -44,12 +46,11 @@ class TowerComponent extends PositionComponent
   double _showRangeTimer = 0.0;
   static const double _showRangeDuration = 2.0;
 
-  // ─── Cannon sprite animation (basic only) ──────────────────────────────────
+  // ─── Cannon sprites (basic only) ───────────────────────────────────────────
   SpriteAnimationComponent? _spriteComp;
   SpriteAnimation? _idleAnim;
   SpriteAnimation? _attackAnim;
-  SpriteAnimation? _fireAnim;
-  bool _isFiringSprite = false;
+  SpriteAnimation? _projectileAnim; // fire frames — used by projectiles, not the tower
 
   // ─── Paints ────────────────────────────────────────────────────────────────
   late Paint _basePaint;
@@ -80,9 +81,10 @@ class TowerComponent extends PositionComponent
   }
 
   Future<void> _loadCannonSprites() async {
-    _idleAnim   = await _buildCannonAnim('idle',   5, stepTime: 0.12, loop: true);
-    _attackAnim = await _buildCannonAnim('attack', 7, stepTime: 0.08, loop: true);
-    _fireAnim   = await _buildCannonAnim('fire',   5, stepTime: 0.05, loop: false);
+    _idleAnim    = await _buildAnim('idle',   5, stepTime: 0.12, loop: true);
+    _attackAnim  = await _buildAnim('attack', 7, stepTime: 0.08, loop: true);
+    // fire frames are for the projectile — loop so it spins while in flight
+    _projectileAnim = await _buildAnim('fire', 5, stepTime: 0.08, loop: true);
 
     _spriteComp = SpriteAnimationComponent(
       animation: _idleAnim,
@@ -93,7 +95,7 @@ class TowerComponent extends PositionComponent
     add(_spriteComp!);
   }
 
-  Future<SpriteAnimation> _buildCannonAnim(
+  Future<SpriteAnimation> _buildAnim(
     String state,
     int frameCount, {
     required double stepTime,
@@ -101,7 +103,7 @@ class TowerComponent extends PositionComponent
   }) async {
     final paths = List.generate(
       frameCount,
-      (i) => 'towers/cannon/$state${i + 1}.png', // idle1, idle2 … (1-based)
+      (i) => 'towers/cannon/$state${i + 1}.png',
     );
     final images = await game.images.loadAll(paths);
     return SpriteAnimation.spriteList(
@@ -115,7 +117,6 @@ class TowerComponent extends PositionComponent
 
   @override
   void update(double dt) {
-    // Range indicator countdown
     if (_showRange && _showRangeTimer > 0) {
       _showRangeTimer -= dt;
       if (_showRangeTimer <= 0) _showRange = false;
@@ -123,7 +124,6 @@ class TowerComponent extends PositionComponent
 
     if (_fireCooldown > 0) _fireCooldown -= dt;
 
-    // Canvas-tower only timers
     if (towerType != TowerType.basic) {
       _idleTimer += dt;
       if (_muzzleFlashTimer > 0) {
@@ -131,12 +131,11 @@ class TowerComponent extends PositionComponent
       }
     }
 
-    final hadTarget = _currentTarget != null;
+    final prevTarget = _currentTarget;
     _acquireTarget();
-    final hasTarget = _currentTarget != null;
 
-    // Drive cannon sprite state on target change
-    if (towerType == TowerType.basic && hadTarget != hasTarget) {
+    // Sync cannon between idle ↔ attack when target is acquired or lost
+    if (towerType == TowerType.basic && prevTarget != _currentTarget) {
       _syncCannonState();
     }
 
@@ -161,7 +160,6 @@ class TowerComponent extends PositionComponent
 
     EnemyComponent? best;
     double bestProgress = -1;
-
     for (final enemy in game.activeEnemies) {
       if (enemy.isDead) continue;
       if (_distanceTo(enemy) <= towerType.range) {
@@ -171,7 +169,6 @@ class TowerComponent extends PositionComponent
         }
       }
     }
-
     _currentTarget = best;
   }
 
@@ -191,11 +188,17 @@ class TowerComponent extends PositionComponent
     return a + diff * t;
   }
 
+  void _syncCannonState() {
+    final sc = _spriteComp;
+    if (sc == null) return;
+    sc.animation = _currentTarget != null ? _attackAnim : _idleAnim;
+  }
+
   void _fireAt(EnemyComponent target) {
     if (target.isDead || !target.isMounted) return;
 
     final muzzleOffset = towerType == TowerType.basic
-        ? Vector2.zero() // cannon sprite fires from centre
+        ? Vector2.zero()
         : Vector2(cos(_gunAngle), sin(_gunAngle)) * (size.x * 0.5);
 
     game.world.add(ProjectileComponent(
@@ -205,40 +208,17 @@ class TowerComponent extends PositionComponent
       speed: towerType.projectileSpeed,
       splashRadius: towerType.splashRadius,
       color: towerType == TowerType.bomb ? const Color(0xFFFF6F00) : null,
+      // Cannon projectile uses the fire sprite frames
+      spriteAnimation: towerType == TowerType.basic ? _projectileAnim : null,
     ));
 
-    if (towerType == TowerType.basic) {
-      _triggerFireAnim();
-    } else {
-      _muzzleFlashTimer = _muzzleFlashDuration;
-    }
+    if (towerType != TowerType.basic) _muzzleFlashTimer = _muzzleFlashDuration;
 
     AudioService.instance.playSfx(switch (towerType) {
       TowerType.basic  => SoundType.sfxCannonFire,
       TowerType.sniper => SoundType.sfxSniperFire,
       TowerType.bomb   => SoundType.sfxMortarFire,
     });
-  }
-
-  // ─── Cannon sprite helpers ─────────────────────────────────────────────────
-
-  /// Switch between idle ↔ attack based on whether a target exists.
-  void _syncCannonState() {
-    final sc = _spriteComp;
-    if (sc == null || _isFiringSprite) return;
-    sc.animation = _currentTarget != null ? _attackAnim : _idleAnim;
-  }
-
-  /// Play the fire animation once, then return to attack or idle.
-  void _triggerFireAnim() {
-    final sc = _spriteComp;
-    if (sc == null || _isFiringSprite) return;
-    _isFiringSprite = true;
-    sc.animation = _fireAnim;
-    sc.animationTicker?.onComplete = () {
-      _isFiringSprite = false;
-      sc.animation = _currentTarget != null ? _attackAnim : _idleAnim;
-    };
   }
 
   // ─── Rendering ─────────────────────────────────────────────────────────────
@@ -248,7 +228,6 @@ class TowerComponent extends PositionComponent
     final cx = size.x / 2;
     final cy = size.y / 2;
 
-    // Range circle drawn for all types
     if (_showRange) {
       canvas.drawCircle(Offset(cx, cy), towerType.range, _rangePaint);
       canvas.drawCircle(Offset(cx, cy), towerType.range, _rangeOutlinePaint);
@@ -257,16 +236,18 @@ class TowerComponent extends PositionComponent
     // Cannon: sprite child handles all visuals
     if (towerType == TowerType.basic) return;
 
-    // ── Sniper / Bomb: canvas rendering (unchanged) ─────────────────────────
+    // ── Sniper / Bomb: canvas rendering ────────────────────────────────────
     final w = size.x;
     final h = size.y;
     final idleBob = sin(_idleTimer * 1.5) * 0.8;
 
-    final baseRect = RRect.fromRectAndRadius(
-      Rect.fromCenter(center: Offset(cx, cy + idleBob), width: w * 0.85, height: h * 0.75),
-      Radius.circular(towerType == TowerType.sniper ? 2 : 4),
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(
+        Rect.fromCenter(center: Offset(cx, cy + idleBob), width: w * 0.85, height: h * 0.75),
+        Radius.circular(towerType == TowerType.sniper ? 2 : 4),
+      ),
+      _basePaint,
     );
-    canvas.drawRRect(baseRect, _basePaint);
 
     canvas.drawRRect(
       RRect.fromRectAndRadius(
@@ -293,9 +274,13 @@ class TowerComponent extends PositionComponent
       case TowerType.bomb:
         barrelPaint.strokeWidth = w * 0.18;
         canvas.drawLine(Offset(0, -w * 0.05), Offset(0, -w * 0.32), barrelPaint);
-        canvas.drawCircle(Offset(0, -w * 0.32), w * 0.12, Paint()..color = towerType.gunColor);
+        canvas.drawCircle(
+          Offset(0, -w * 0.32),
+          w * 0.12,
+          Paint()..color = towerType.gunColor,
+        );
       case TowerType.basic:
-        break; // handled above
+        break;
     }
 
     if (_isFiring) {
