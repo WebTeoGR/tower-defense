@@ -36,12 +36,19 @@ class EnemyComponent extends PositionComponent
   late int _currentHealth;
   final double _speed;
 
-  // ─── Animation ─────────────────────────────────────────────────────────────
+  // ─── Non-sprite animation (fast / tank) ────────────────────────────────────
   double _walkTimer = 0.0;
   double _walkAngle = 0.0;
   bool _isDead = false;
   double _deathTimer = 0.0;
   static const double _deathDuration = 0.4;
+
+  // ─── Troll sprite state ────────────────────────────────────────────────────
+  SpriteAnimationComponent? _spriteComp;
+  SpriteAnimation? _walkAnim;
+  SpriteAnimation? _hurtAnim;
+  SpriteAnimation? _dieAnim;
+  bool _isHurting = false;
 
   // ─── Paints ────────────────────────────────────────────────────────────────
   late Paint _bodyPaint;
@@ -72,6 +79,43 @@ class EnemyComponent extends PositionComponent
     }
 
     priority = 10;
+
+    if (enemyType == EnemyType.basic) {
+      await _loadTrollAnimations();
+    }
+  }
+
+  Future<void> _loadTrollAnimations() async {
+    _walkAnim = await _buildAnim('walk', 20, stepTime: 0.05, loop: true);
+    _hurtAnim = await _buildAnim('hurt', 20, stepTime: 0.04, loop: false);
+    _dieAnim  = await _buildAnim('die',  20, stepTime: 0.05, loop: false);
+
+    _spriteComp = SpriteAnimationComponent(
+      animation: _walkAnim,
+      size: size.clone(),
+      // Center anchor so horizontal flip works without position offset.
+      anchor: Anchor.center,
+      position: size / 2,
+    );
+    add(_spriteComp!);
+  }
+
+  Future<SpriteAnimation> _buildAnim(
+    String state,
+    int frames, {
+    required double stepTime,
+    required bool loop,
+  }) async {
+    final paths = List.generate(
+      frames,
+      (i) => 'enemies/troll/3_enemies_1_${state}_${i.toString().padLeft(3, '0')}.png',
+    );
+    final images = await game.images.loadAll(paths);
+    return SpriteAnimation.spriteList(
+      images.map((img) => Sprite(img)).toList(),
+      stepTime: stepTime,
+      loop: loop,
+    );
   }
 
   // ─── Update ────────────────────────────────────────────────────────────────
@@ -79,8 +123,12 @@ class EnemyComponent extends PositionComponent
   @override
   void update(double dt) {
     if (_isDead) {
-      _deathTimer += dt;
-      if (_deathTimer >= _deathDuration) removeFromParent();
+      // Troll die animation drives removal via onComplete.
+      // Other types use the canvas death timer.
+      if (enemyType != EnemyType.basic) {
+        _deathTimer += dt;
+        if (_deathTimer >= _deathDuration) removeFromParent();
+      }
       return;
     }
 
@@ -106,8 +154,17 @@ class EnemyComponent extends PositionComponent
     } else {
       final dir = toTarget.normalized();
       _walkAngle = atan2(dir.y, dir.x);
+      _updateSpriteFlip(dir.x);
       position += dir * step;
     }
+  }
+
+  /// Flip the troll sprite so it always faces the direction of travel.
+  void _updateSpriteFlip(double dirX) {
+    final sc = _spriteComp;
+    if (sc == null) return;
+    // scale.x = -1 mirrors around the center anchor (no position offset needed).
+    sc.scale.x = dirX < 0 ? -1.0 : 1.0;
   }
 
   void _onReachedEnd() {
@@ -132,19 +189,46 @@ class EnemyComponent extends PositionComponent
       _die();
       return true;
     }
+    if (enemyType == EnemyType.basic) _triggerHurt();
     return false;
+  }
+
+  void _triggerHurt() {
+    // Don't interrupt an already-playing hurt animation.
+    if (_isHurting || _spriteComp == null) return;
+    _isHurting = true;
+    _spriteComp!.animation = _hurtAnim;
+    _spriteComp!.animationTicker?.onComplete = () {
+      _isHurting = false;
+      if (!_isDead) _spriteComp!.animation = _walkAnim;
+    };
   }
 
   void _die() {
     _isDead = true;
     AudioService.instance.playSfx(SoundType.sfxEnemyDie);
     game.enemyKilled(enemyType.killReward);
+
+    if (enemyType == EnemyType.basic && _spriteComp != null) {
+      // Play die animation; remove after last frame.
+      _isHurting = false;
+      _spriteComp!.animation = _dieAnim;
+      _spriteComp!.animationTicker?.onComplete = removeFromParent;
+    }
+    // Non-basic types: update() runs _deathDuration timer then removes.
   }
 
   // ─── Rendering ─────────────────────────────────────────────────────────────
 
   @override
   void render(Canvas canvas) {
+    if (enemyType == EnemyType.basic) {
+      // SpriteAnimationComponent child handles all drawing.
+      // Only draw the health bar here (while alive).
+      if (!_isDead) _renderHealthBar(canvas, size.x, size.y);
+      return;
+    }
+
     if (_isDead) {
       _renderDeathAnimation(canvas);
       return;
@@ -155,36 +239,18 @@ class EnemyComponent extends PositionComponent
     final bob = sin(_walkTimer) * 2.0;
 
     switch (enemyType) {
-      case EnemyType.tank:
-        _renderTank(canvas, w, h, bob);
       case EnemyType.fast:
         _renderFast(canvas, w, h, bob);
+      case EnemyType.tank:
+        _renderTank(canvas, w, h, bob);
       case EnemyType.basic:
-        _renderBasic(canvas, w, h, bob);
+        break; // handled above
     }
 
     _renderHealthBar(canvas, w, h);
   }
 
-  void _renderBasic(Canvas canvas, double w, double h, double bob) {
-    final bodyRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(2, 2 + bob, w - 4, h - 4),
-      Radius.circular(w * 0.25),
-    );
-    canvas.drawRRect(bodyRect, _bodyPaint);
-    canvas.drawRRect(bodyRect, _outlinePaint);
-
-    final eyeOffsetX = cos(_walkAngle) * 3;
-    final eyeRadius = w * 0.1;
-    final eyeY = h * 0.35 + bob;
-    canvas.drawCircle(Offset(w * 0.35 + eyeOffsetX, eyeY), eyeRadius, _eyePaint);
-    canvas.drawCircle(Offset(w * 0.65 + eyeOffsetX, eyeY), eyeRadius, _eyePaint);
-    canvas.drawCircle(Offset(w * 0.36 + eyeOffsetX, eyeY), eyeRadius * 0.5, _pupilPaint);
-    canvas.drawCircle(Offset(w * 0.66 + eyeOffsetX, eyeY), eyeRadius * 0.5, _pupilPaint);
-  }
-
   void _renderFast(Canvas canvas, double w, double h, double bob) {
-    // Speed streaks behind
     final streakPaint = Paint()
       ..color = enemyType.bodyColor.withAlpha(50)
       ..style = PaintingStyle.fill;
@@ -197,7 +263,6 @@ class EnemyComponent extends PositionComponent
       streakPaint,
     );
 
-    // Slim, pointed body
     final path = Path()
       ..moveTo(cx + cos(_walkAngle) * w * 0.45, cy + sin(_walkAngle) * h * 0.45)
       ..lineTo(cx - sin(_walkAngle) * w * 0.25, cy + cos(_walkAngle) * h * 0.25)
@@ -209,7 +274,6 @@ class EnemyComponent extends PositionComponent
   }
 
   void _renderTank(Canvas canvas, double w, double h, double bob) {
-    // Chunky square body with rounded corners
     final bodyRect = RRect.fromRectAndRadius(
       Rect.fromLTWH(1, 2 + bob, w - 2, h - 4),
       Radius.circular(w * 0.12),
@@ -217,14 +281,12 @@ class EnemyComponent extends PositionComponent
     canvas.drawRRect(bodyRect, _bodyPaint);
     canvas.drawRRect(bodyRect, _outlinePaint);
 
-    // Armour plates
     final platePaint = Paint()
       ..color = enemyType.outlineColor.withAlpha(120)
       ..style = PaintingStyle.fill;
     canvas.drawRect(Rect.fromLTWH(3, h * 0.25 + bob, w - 6, h * 0.18), platePaint);
     canvas.drawRect(Rect.fromLTWH(3, h * 0.55 + bob, w - 6, h * 0.18), platePaint);
 
-    // Angry eyes
     final eyeRadius = w * 0.12;
     final eyeY = h * 0.3 + bob;
     canvas.drawRect(Rect.fromCenter(center: Offset(w * 0.3, eyeY), width: eyeRadius * 2, height: eyeRadius), _eyePaint);
@@ -257,14 +319,12 @@ class EnemyComponent extends PositionComponent
     canvas.scale(scale, scale);
     canvas.translate(-size.x / 2, -size.y / 2);
 
-    final fadePaint = Paint()
-      ..color = enemyType.bodyColor.withAlpha((alpha * 255).round());
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromLTWH(2, 2, size.x - 4, size.y - 4),
         Radius.circular(size.x * 0.25),
       ),
-      fadePaint,
+      Paint()..color = enemyType.bodyColor.withAlpha((alpha * 255).round()),
     );
     canvas.restore();
   }

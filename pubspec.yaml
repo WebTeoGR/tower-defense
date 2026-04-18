@@ -25,3 +25,4 @@ flutter:
   # Add your sprite PNGs here when replacing placeholder rendering
   assets:
     - assets/images/
+    - assets/images/enemies/troll/
