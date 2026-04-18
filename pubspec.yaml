@@ -26,3 +26,5 @@ flutter:
   assets:
     - assets/images/
     - assets/images/enemies/troll/
+    - assets/images/enemies/fast/
+    - assets/images/enemies/tank/
