@@ -31,16 +31,25 @@ class TowerComponent extends PositionComponent
   // ─── Targeting ─────────────────────────────────────────────────────────────
   double _fireCooldown = 0.0;
   EnemyComponent? _currentTarget;
-  double _gunAngle = -pi / 2;
 
-  // ─── Animation ─────────────────────────────────────────────────────────────
+  // ─── Canvas-tower animation (sniper / bomb only) ────────────────────────────
+  double _gunAngle = -pi / 2;
   double _idleTimer = 0.0;
   double _muzzleFlashTimer = 0.0;
+  static const double _muzzleFlashDuration = 0.12;
+  bool get _isFiring => _muzzleFlashTimer > 0;
+
+  // ─── Range indicator (all types) ───────────────────────────────────────────
   bool _showRange = false;
   double _showRangeTimer = 0.0;
-  static const double _muzzleFlashDuration = 0.12;
   static const double _showRangeDuration = 2.0;
-  bool get _isFiring => _muzzleFlashTimer > 0;
+
+  // ─── Cannon sprite animation (basic only) ──────────────────────────────────
+  SpriteAnimationComponent? _spriteComp;
+  SpriteAnimation? _idleAnim;
+  SpriteAnimation? _attackAnim;
+  SpriteAnimation? _fireAnim;
+  bool _isFiringSprite = false;
 
   // ─── Paints ────────────────────────────────────────────────────────────────
   late Paint _basePaint;
@@ -53,8 +62,6 @@ class TowerComponent extends PositionComponent
 
   @override
   Future<void> onLoad() async {
-    _basePaint = Paint()..color = towerType.primaryColor;
-    _topPaint = Paint()..color = towerType.secondaryColor;
     _rangePaint = Paint()..color = towerType.primaryColor.withAlpha(30);
     _rangeOutlinePaint = Paint()
       ..color = towerType.primaryColor.withAlpha(80)
@@ -63,29 +70,78 @@ class TowerComponent extends PositionComponent
 
     _showRange = true;
     _showRangeTimer = _showRangeDuration;
+
+    if (towerType == TowerType.basic) {
+      await _loadCannonSprites();
+    } else {
+      _basePaint = Paint()..color = towerType.primaryColor;
+      _topPaint = Paint()..color = towerType.secondaryColor;
+    }
+  }
+
+  Future<void> _loadCannonSprites() async {
+    _idleAnim   = await _buildCannonAnim('idle',   5, stepTime: 0.12, loop: true);
+    _attackAnim = await _buildCannonAnim('attack', 7, stepTime: 0.08, loop: true);
+    _fireAnim   = await _buildCannonAnim('fire',   5, stepTime: 0.05, loop: false);
+
+    _spriteComp = SpriteAnimationComponent(
+      animation: _idleAnim,
+      size: size.clone(),
+      anchor: Anchor.center,
+      position: size / 2,
+    );
+    add(_spriteComp!);
+  }
+
+  Future<SpriteAnimation> _buildCannonAnim(
+    String state,
+    int frameCount, {
+    required double stepTime,
+    required bool loop,
+  }) async {
+    final paths = List.generate(
+      frameCount,
+      (i) => 'towers/cannon/$state${i + 1}.png', // idle1, idle2 … (1-based)
+    );
+    final images = await game.images.loadAll(paths);
+    return SpriteAnimation.spriteList(
+      images.map((img) => Sprite(img)).toList(),
+      stepTime: stepTime,
+      loop: loop,
+    );
   }
 
   // ─── Update ────────────────────────────────────────────────────────────────
 
   @override
   void update(double dt) {
-    _idleTimer += dt;
-
+    // Range indicator countdown
     if (_showRange && _showRangeTimer > 0) {
       _showRangeTimer -= dt;
       if (_showRangeTimer <= 0) _showRange = false;
     }
 
-    if (_muzzleFlashTimer > 0) {
-      _muzzleFlashTimer = (_muzzleFlashTimer - dt).clamp(0, _muzzleFlashDuration);
-    }
-
     if (_fireCooldown > 0) _fireCooldown -= dt;
 
+    // Canvas-tower only timers
+    if (towerType != TowerType.basic) {
+      _idleTimer += dt;
+      if (_muzzleFlashTimer > 0) {
+        _muzzleFlashTimer = (_muzzleFlashTimer - dt).clamp(0, _muzzleFlashDuration);
+      }
+    }
+
+    final hadTarget = _currentTarget != null;
     _acquireTarget();
+    final hasTarget = _currentTarget != null;
+
+    // Drive cannon sprite state on target change
+    if (towerType == TowerType.basic && hadTarget != hasTarget) {
+      _syncCannonState();
+    }
 
     if (_currentTarget != null) {
-      _aimAtTarget(_currentTarget!);
+      if (towerType != TowerType.basic) _aimAtTarget(_currentTarget!);
       if (_fireCooldown <= 0) {
         _fireAt(_currentTarget!);
         _fireCooldown = 1.0 / towerType.fireRate;
@@ -120,7 +176,6 @@ class TowerComponent extends PositionComponent
   }
 
   double _distanceTo(EnemyComponent enemy) => (centre - enemy.centre).length;
-
   Vector2 get centre => position + size / 2;
 
   void _aimAtTarget(EnemyComponent target) {
@@ -131,24 +186,20 @@ class TowerComponent extends PositionComponent
 
   double _lerpAngle(double a, double b, double t) {
     double diff = b - a;
-    while (diff > pi) {
-      diff -= 2 * pi;
-    }
-    while (diff < -pi) {
-      diff += 2 * pi;
-    }
+    while (diff > pi) { diff -= 2 * pi; }
+    while (diff < -pi) { diff += 2 * pi; }
     return a + diff * t;
   }
 
   void _fireAt(EnemyComponent target) {
     if (target.isDead || !target.isMounted) return;
 
-    final muzzleOffset = Vector2(cos(_gunAngle), sin(_gunAngle)) * (size.x * 0.5);
-    final muzzleWorld = centre + muzzleOffset;
+    final muzzleOffset = towerType == TowerType.basic
+        ? Vector2.zero() // cannon sprite fires from centre
+        : Vector2(cos(_gunAngle), sin(_gunAngle)) * (size.x * 0.5);
 
-    // Projectiles belong in the world, not the game root.
     game.world.add(ProjectileComponent(
-      startPosition: muzzleWorld,
+      startPosition: centre + muzzleOffset,
       target: target,
       damage: towerType.damage,
       speed: towerType.projectileSpeed,
@@ -156,7 +207,11 @@ class TowerComponent extends PositionComponent
       color: towerType == TowerType.bomb ? const Color(0xFFFF6F00) : null,
     ));
 
-    _muzzleFlashTimer = _muzzleFlashDuration;
+    if (towerType == TowerType.basic) {
+      _triggerFireAnim();
+    } else {
+      _muzzleFlashTimer = _muzzleFlashDuration;
+    }
 
     AudioService.instance.playSfx(switch (towerType) {
       TowerType.basic  => SoundType.sfxCannonFire,
@@ -165,30 +220,54 @@ class TowerComponent extends PositionComponent
     });
   }
 
+  // ─── Cannon sprite helpers ─────────────────────────────────────────────────
+
+  /// Switch between idle ↔ attack based on whether a target exists.
+  void _syncCannonState() {
+    final sc = _spriteComp;
+    if (sc == null || _isFiringSprite) return;
+    sc.animation = _currentTarget != null ? _attackAnim : _idleAnim;
+  }
+
+  /// Play the fire animation once, then return to attack or idle.
+  void _triggerFireAnim() {
+    final sc = _spriteComp;
+    if (sc == null || _isFiringSprite) return;
+    _isFiringSprite = true;
+    sc.animation = _fireAnim;
+    sc.animationTicker?.onComplete = () {
+      _isFiringSprite = false;
+      sc.animation = _currentTarget != null ? _attackAnim : _idleAnim;
+    };
+  }
+
   // ─── Rendering ─────────────────────────────────────────────────────────────
 
   @override
   void render(Canvas canvas) {
-    final w = size.x;
-    final h = size.y;
-    final cx = w / 2;
-    final cy = h / 2;
+    final cx = size.x / 2;
+    final cy = size.y / 2;
 
+    // Range circle drawn for all types
     if (_showRange) {
       canvas.drawCircle(Offset(cx, cy), towerType.range, _rangePaint);
       canvas.drawCircle(Offset(cx, cy), towerType.range, _rangeOutlinePaint);
     }
 
+    // Cannon: sprite child handles all visuals
+    if (towerType == TowerType.basic) return;
+
+    // ── Sniper / Bomb: canvas rendering (unchanged) ─────────────────────────
+    final w = size.x;
+    final h = size.y;
     final idleBob = sin(_idleTimer * 1.5) * 0.8;
 
-    // Base
     final baseRect = RRect.fromRectAndRadius(
       Rect.fromCenter(center: Offset(cx, cy + idleBob), width: w * 0.85, height: h * 0.75),
       Radius.circular(towerType == TowerType.sniper ? 2 : 4),
     );
     canvas.drawRRect(baseRect, _basePaint);
 
-    // Highlight
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromCenter(center: Offset(cx - 2, cy - 2 + idleBob), width: w * 0.6, height: h * 0.5),
@@ -197,7 +276,6 @@ class TowerComponent extends PositionComponent
       Paint()..color = const Color(0xFF90A4AE).withAlpha(50),
     );
 
-    // Turret + barrel
     canvas.save();
     canvas.translate(cx, cy + idleBob);
     canvas.rotate(_gunAngle + pi / 2);
@@ -210,37 +288,26 @@ class TowerComponent extends PositionComponent
 
     switch (towerType) {
       case TowerType.sniper:
-        // Long thin barrel
         barrelPaint.strokeWidth = w * 0.08;
         canvas.drawLine(Offset(0, -w * 0.05), Offset(0, -w * 0.62), barrelPaint);
       case TowerType.bomb:
-        // Short wide barrel (mortar tube)
         barrelPaint.strokeWidth = w * 0.18;
         canvas.drawLine(Offset(0, -w * 0.05), Offset(0, -w * 0.32), barrelPaint);
-        // Muzzle ring
-        canvas.drawCircle(
-          Offset(0, -w * 0.32),
-          w * 0.12,
-          Paint()..color = towerType.gunColor,
-        );
+        canvas.drawCircle(Offset(0, -w * 0.32), w * 0.12, Paint()..color = towerType.gunColor);
       case TowerType.basic:
-        barrelPaint.strokeWidth = w * 0.12;
-        canvas.drawLine(Offset(0, -w * 0.05), Offset(0, -w * 0.48), barrelPaint);
+        break; // handled above
     }
 
-    // Muzzle flash
     if (_isFiring) {
       final flashAlpha = _muzzleFlashTimer / _muzzleFlashDuration;
-      final flashPos = switch (towerType) {
-        TowerType.sniper => Offset(0, -w * 0.62),
-        TowerType.bomb => Offset(0, -w * 0.32),
-        TowerType.basic => Offset(0, -w * 0.48),
-      };
+      final flashPos = towerType == TowerType.sniper
+          ? Offset(0, -w * 0.62)
+          : Offset(0, -w * 0.32);
       _muzzlePaint.color = Colors.orange.withAlpha((flashAlpha * 220).round());
       canvas.drawCircle(flashPos, w * 0.14, _muzzlePaint);
       canvas.drawCircle(
         flashPos,
-        w * (towerType == TowerType.bomb ? 0.32 : 0.22),
+        w * 0.22,
         Paint()..color = Colors.yellow.withAlpha((flashAlpha * 80).round()),
       );
     }
@@ -253,17 +320,13 @@ class TowerComponent extends PositionComponent
   void _drawBattlements(Canvas canvas, double cx, double cy, double w, double h) {
     final battSize = w * 0.14;
     final offset = w * 0.36;
-    final positions = [
+    for (final p in [
       Offset(cx - offset, cy - h * 0.28),
       Offset(cx + offset - battSize, cy - h * 0.28),
       Offset(cx - offset, cy + h * 0.14),
       Offset(cx + offset - battSize, cy + h * 0.14),
-    ];
-    for (final p in positions) {
-      canvas.drawRect(
-        Rect.fromLTWH(p.dx, p.dy, battSize, battSize * 1.2),
-        _basePaint,
-      );
+    ]) {
+      canvas.drawRect(Rect.fromLTWH(p.dx, p.dy, battSize, battSize * 1.2), _basePaint);
     }
   }
 }
