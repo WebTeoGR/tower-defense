@@ -146,7 +146,8 @@ class TowerComponent extends PositionComponent
     final muzzleOffset = Vector2(cos(_gunAngle), sin(_gunAngle)) * (size.x * 0.5);
     final muzzleWorld = centre + muzzleOffset;
 
-    game.add(ProjectileComponent(
+    // Projectiles belong in the world, not the game root.
+    game.world.add(ProjectileComponent(
       startPosition: muzzleWorld,
       target: target,
       damage: towerType.damage,

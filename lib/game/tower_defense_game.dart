@@ -20,13 +20,13 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
 
   final StageData currentStage;
 
-  // ─── Reactive state ─────────────────────────────────────────────────────────
+  // ─── State ──────────────────────────────────────────────────────────────────
   int gold = 0;
   int lives = 0;
   int score = 0;
   int currentWave = 0;
-
   bool isGameOver = false;
+  bool isVictory = false;
   bool isWaveActive = false;
 
   TowerType selectedTowerType = TowerType.basic;
@@ -45,6 +45,9 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
 
   double _incomeAccumulator = 0.0;
 
+  /// Exposed so HudComponent can read it every frame.
+  double get waveCountdown => _waveTimer;
+
   // ─── Lifecycle ──────────────────────────────────────────────────────────────
 
   @override
@@ -55,23 +58,24 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
     gold = currentStage.startingGold;
     lives = currentStage.startingLives;
 
+    // Game entities live in the Flame-managed World.
     _mapComponent = MapComponent(stage: currentStage);
-    await add(_mapComponent);
+    await world.add(_mapComponent);
 
+    // HUD lives in the camera viewport (screen space, unaffected by camera).
     _hudComponent = HudComponent();
-    await add(_hudComponent);
+    await camera.viewport.add(_hudComponent);
 
     _startWaveCountdown();
 
     overlays.add('buildPanel');
     overlays.add('pauseButton');
 
-    // Start stage background music
     final bgm = switch (currentStage.id) {
-      'forest'  => SoundType.bgmForest,
-      'desert'  => SoundType.bgmDesert,
+      'forest' => SoundType.bgmForest,
+      'desert' => SoundType.bgmDesert,
       'volcano' => SoundType.bgmVolcano,
-      _         => SoundType.bgmMenu,
+      _ => SoundType.bgmMenu,
     };
     AudioService.instance.playBgm(bgm);
   }
@@ -95,14 +99,16 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
 
     final tapPos = event.localPosition;
 
-    // Ignore taps in the build panel area at the bottom
+    // Block taps in the HUD bar at the top and the build panel at the bottom.
+    if (tapPos.y < HudComponent.hudHeight) return;
     if (tapPos.y > size.y - GameConstants.buildPanelHeight) return;
 
     final tileSize = _mapComponent.tileSize;
     final col = (tapPos.x / tileSize).floor();
     final row = (tapPos.y / tileSize).floor();
 
-    if (col < 0 || col >= GameConstants.mapCols || row < 0 || row >= GameConstants.mapRows) return;
+    if (col < 0 || col >= GameConstants.mapCols) return;
+    if (row < 0 || row >= GameConstants.mapRows) return;
 
     _tryPlaceTower(col, row);
   }
@@ -124,7 +130,8 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
     spendGold(type.cost);
     _mapComponent.setTileType(col, row, TileType.tower);
     AudioService.instance.playSfx(SoundType.sfxTowerPlace);
-    add(TowerComponent(
+
+    world.add(TowerComponent(
       gridCol: col,
       gridRow: row,
       tileSize: _mapComponent.tileSize,
@@ -134,30 +141,18 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
 
   // ─── Economy ────────────────────────────────────────────────────────────────
 
-  void spendGold(int amount) {
-    gold = max(0, gold - amount);
-    _hudComponent.refresh();
-  }
-
-  void earnGold(int amount) {
-    gold += amount;
-    _hudComponent.refresh();
-  }
-
-  void addScore(int points) {
-    score += points;
-    _hudComponent.refresh();
-  }
+  void spendGold(int amount) => gold = max(0, gold - amount);
+  void earnGold(int amount) => gold += amount;
+  void addScore(int points) => score += points;
 
   // ─── Enemy callbacks ────────────────────────────────────────────────────────
 
   void enemyReachedEnd() {
     lives--;
-    _hudComponent.refresh();
     _enemiesAliveThisWave--;
 
     if (lives <= 0) {
-      _triggerGameOver();
+      _endGame(victory: false);
     } else {
       _checkWaveComplete();
     }
@@ -175,7 +170,6 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
   void _startWaveCountdown() {
     _waveTimer = GameConstants.timeBetweenWaves;
     isWaveActive = false;
-    _hudComponent.refresh();
   }
 
   void _handlePassiveIncome(double dt) {
@@ -198,20 +192,13 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
       }
     } else {
       _waveTimer -= dt;
-      if (_waveTimer <= 0) {
-        _launchNextWave();
-      }
-      _hudComponent.updateCountdown(_waveTimer);
+      if (_waveTimer <= 0) _launchNextWave();
     }
   }
 
   void _launchNextWave() {
     if (currentWave >= currentStage.waves.length) {
-      isGameOver = true;
-      _hudComponent.showVictory(score);
-      _endGameOverlays();
-      AudioService.instance.stopBgm();
-      AudioService.instance.playSfx(SoundType.sfxVictory);
+      _endGame(victory: true);
       return;
     }
 
@@ -223,7 +210,6 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
     _enemiesAliveThisWave = _currentWaveData!.enemyCount;
     _enemiesSpawnedThisWave = 0;
     _spawnTimer = 0;
-    _hudComponent.refresh();
   }
 
   void _spawnEnemy() {
@@ -231,7 +217,7 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
     final types = _currentWaveData!.enemyTypes;
     final enemyType = types[_enemiesSpawnedThisWave % types.length];
 
-    add(EnemyComponent(
+    world.add(EnemyComponent(
       path: _mapComponent.worldPath,
       enemyType: enemyType,
       waveHealthMultiplier: _currentWaveData!.healthMultiplier,
@@ -252,18 +238,18 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
 
   // ─── Game end ───────────────────────────────────────────────────────────────
 
-  void _triggerGameOver() {
+  void _endGame({required bool victory}) {
     isGameOver = true;
-    _hudComponent.showGameOver(score);
-    _endGameOverlays();
-    AudioService.instance.stopBgm();
-    AudioService.instance.playSfx(SoundType.sfxGameOver);
-  }
-
-  void _endGameOverlays() {
+    isVictory = victory;
+    // Pause the engine so entities freeze while the overlay is visible.
+    pauseEngine();
     overlays.remove('buildPanel');
     overlays.remove('pauseButton');
     overlays.add('restartButton');
+    AudioService.instance.stopBgm();
+    AudioService.instance.playSfx(
+      victory ? SoundType.sfxVictory : SoundType.sfxGameOver,
+    );
   }
 
   // ─── Pause ──────────────────────────────────────────────────────────────────
@@ -278,8 +264,11 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
     AudioService.instance.resumeBgm();
   }
 
-  // ─── Accessors ──────────────────────────────────────────────────────────────
+  // ─── Accessors for components ────────────────────────────────────────────────
 
-  Iterable<EnemyComponent> get activeEnemies => children.whereType<EnemyComponent>();
+  /// All living enemy components currently in the world.
+  Iterable<EnemyComponent> get activeEnemies =>
+      world.children.whereType<EnemyComponent>();
+
   double get tileSize => _mapComponent.tileSize;
 }

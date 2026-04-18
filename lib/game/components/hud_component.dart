@@ -1,201 +1,172 @@
-import 'dart:ui';
-
 import 'package:flame/components.dart';
-import 'package:flutter/painting.dart'
-    show TextPainter, TextSpan, TextDirection, TextStyle, FontWeight, Shadow;
-import 'package:flutter/material.dart' show Colors;
+import 'package:flame/text.dart';
+import 'package:flutter/material.dart';
 
 import '../tower_defense_game.dart';
 import '../utils/constants.dart';
 
+/// HUD lives in the camera viewport (screen space).
+/// All stats are read from the game every frame — no manual refresh needed.
 class HudComponent extends PositionComponent
     with HasGameReference<TowerDefenseGame> {
-  HudComponent() {
-    priority = 100;
-  }
+  HudComponent() : super(priority: 100);
 
-  // ─── Toast ─────────────────────────────────────────────────────────────────
-  String _message = '';
-  double _messageTimer = 0.0;
-  static const double _messageDuration = 2.0;
+  static const double hudHeight = 52.0;
 
-  // ─── Countdown ─────────────────────────────────────────────────────────────
-  double _countdown = 0.0;
+  late TextComponent _goldText;
+  late TextComponent _livesText;
+  late TextComponent _scoreText;
+  late TextComponent _waveText;
+  late TextComponent _hintText;
+  late TextComponent _toastText;
+  late TextComponent _countdownText;
 
-  // ─── Game-end overlay ──────────────────────────────────────────────────────
-  bool _isGameEnd = false;
-  bool _isVictory = false;
-  int _finalScore = 0;
-
-  final Paint _hudBgPaint = Paint()..color = GameConstants.colorHudBg;
-  final Paint _panelPaint = Paint()..color = const Color(0xDD0D0D1A);
-
-  late TextPainter _textPainter;
-
-  static const double _hudHeight = 52.0;
-  static const double _padding = 10.0;
+  double _toastTimer = 0.0;
+  static const double _toastDuration = 2.0;
 
   @override
   Future<void> onLoad() async {
     size = game.size;
-    _textPainter = TextPainter(textDirection: TextDirection.ltr);
+
+    // ── Background bar ────────────────────────────────────────────────────────
+    add(RectangleComponent(
+      size: Vector2(size.x, hudHeight),
+      paint: Paint()..color = GameConstants.colorHudBg,
+    ));
+
+    // Cyan separator line under bar
+    add(RectangleComponent(
+      position: Vector2(0, hudHeight),
+      size: Vector2(size.x, 1),
+      paint: Paint()..color = const Color(0xFF00BCD4).withAlpha(80),
+    ));
+
+    // ── Stat labels ───────────────────────────────────────────────────────────
+    _goldText = TextComponent(
+      position: Vector2(10, 8),
+      textRenderer: TextPaint(
+        style: TextStyle(
+          color: GameConstants.colorGold,
+          fontSize: 15,
+          shadows: const [Shadow(blurRadius: 4)],
+        ),
+      ),
+    );
+
+    _livesText = TextComponent(
+      position: Vector2(size.x * 0.30, 8),
+      textRenderer: TextPaint(
+        style: TextStyle(
+          color: GameConstants.colorLives,
+          fontSize: 15,
+          shadows: const [Shadow(blurRadius: 4)],
+        ),
+      ),
+    );
+
+    _scoreText = TextComponent(
+      position: Vector2(size.x * 0.52, 8),
+      textRenderer: TextPaint(
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 15,
+          shadows: [Shadow(blurRadius: 4)],
+        ),
+      ),
+    );
+
+    _waveText = TextComponent(
+      position: Vector2(size.x * 0.74, 8),
+      textRenderer: TextPaint(
+        style: const TextStyle(
+          color: Color(0xFF80DEEA),
+          fontSize: 15,
+          fontWeight: FontWeight.bold,
+          shadows: [Shadow(blurRadius: 4)],
+        ),
+      ),
+    );
+
+    _hintText = TextComponent(
+      position: Vector2(10, 30),
+      textRenderer: TextPaint(
+        style: const TextStyle(color: Colors.white54, fontSize: 11),
+      ),
+    );
+
+    // ── Toast (centred, shown briefly) ────────────────────────────────────────
+    _toastText = TextComponent(
+      anchor: Anchor.center,
+      position: Vector2(size.x / 2, size.y * 0.45),
+      textRenderer: TextPaint(
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 14,
+          shadows: [Shadow(blurRadius: 4, color: Colors.black)],
+        ),
+      ),
+      priority: 10,
+    );
+
+    // ── Wave countdown ────────────────────────────────────────────────────────
+    _countdownText = TextComponent(
+      anchor: Anchor.center,
+      position: Vector2(size.x / 2, size.y - GameConstants.buildPanelHeight - 40),
+      textRenderer: TextPaint(
+        style: const TextStyle(
+          color: Color(0xFFFFEB3B),
+          fontSize: 16,
+          fontWeight: FontWeight.bold,
+          shadows: [Shadow(blurRadius: 4)],
+        ),
+      ),
+    );
+
+    addAll([
+      _goldText,
+      _livesText,
+      _scoreText,
+      _waveText,
+      _hintText,
+      _toastText,
+      _countdownText,
+    ]);
   }
+
+  // ─── Update ─────────────────────────────────────────────────────────────────
 
   @override
   void update(double dt) {
-    if (_messageTimer > 0) {
-      _messageTimer -= dt;
-      if (_messageTimer <= 0) _message = '';
+    super.update(dt);
+
+    // Stat bar — read live from game every frame.
+    _goldText.text = 'Gold: ${game.gold}';
+    _livesText.text = 'Lives: ${game.lives}';
+    _scoreText.text = 'Score: ${game.score}';
+    _waveText.text = game.isWaveActive
+        ? 'Wave ${game.currentWave}'
+        : 'Wave ${game.currentWave + 1}';
+    _hintText.text =
+        'Tap: ${game.selectedTowerType.displayName} (${game.selectedTowerType.cost}g)';
+
+    // Toast fade-out.
+    if (_toastTimer > 0) {
+      _toastTimer -= dt;
+      if (_toastTimer <= 0) _toastText.text = '';
+    }
+
+    // Countdown only between waves.
+    if (!game.isWaveActive && !game.isGameOver && game.waveCountdown > 0) {
+      _countdownText.text = 'Next wave in ${game.waveCountdown.ceil()} s';
+    } else {
+      _countdownText.text = '';
     }
   }
+
+  // ─── Public API ─────────────────────────────────────────────────────────────
 
   void showMessage(String msg) {
-    _message = msg;
-    _messageTimer = _messageDuration;
-  }
-
-  void updateCountdown(double seconds) {
-    _countdown = seconds;
-  }
-
-  void showGameOver(int finalScore) {
-    _isGameEnd = true;
-    _isVictory = false;
-    _finalScore = finalScore;
-  }
-
-  void showVictory(int finalScore) {
-    _isGameEnd = true;
-    _isVictory = true;
-    _finalScore = finalScore;
-  }
-
-  void refresh() {}
-
-  @override
-  void render(Canvas canvas) {
-    _renderHudBar(canvas);
-    _renderToastMessage(canvas);
-
-    if (!game.isWaveActive && !_isGameEnd) {
-      _renderWaveCountdown(canvas);
-    }
-
-    if (_isGameEnd) {
-      _renderGameEnd(canvas);
-    }
-  }
-
-  void _renderHudBar(Canvas canvas) {
-    final w = size.x;
-
-    canvas.drawRect(Rect.fromLTWH(0, 0, w, _hudHeight), _hudBgPaint);
-    canvas.drawLine(
-      Offset(0, _hudHeight),
-      Offset(w, _hudHeight),
-      Paint()
-        ..color = const Color(0xFF00BCD4).withAlpha(80)
-        ..strokeWidth = 1.0,
-    );
-
-    _drawText(canvas, '💰 ${game.gold}', Offset(_padding, 8), GameConstants.colorGold, fontSize: 15);
-    _drawText(canvas, '❤️ ${game.lives}', Offset(w * 0.30, 8), GameConstants.colorLives, fontSize: 15);
-    _drawText(canvas, '⭐ ${game.score}', Offset(w * 0.52, 8), Colors.white, fontSize: 15);
-
-    final waveText = game.isWaveActive ? 'Wave ${game.currentWave}' : 'Wave ${game.currentWave + 1}';
-    _drawText(canvas, waveText, Offset(w * 0.74, 8), const Color(0xFF80DEEA), fontSize: 15, bold: true);
-
-    final cost = game.selectedTowerType.cost;
-    _drawText(
-      canvas,
-      'Tap to build ${game.selectedTowerType.displayName} (${cost}g)',
-      Offset(_padding, 30),
-      Colors.white54,
-      fontSize: 11,
-    );
-  }
-
-  void _renderToastMessage(Canvas canvas) {
-    if (_message.isEmpty) return;
-
-    final alpha = (_messageTimer / _messageDuration).clamp(0.0, 1.0);
-    final w = size.x;
-    final y = size.y * 0.45;
-    final textW = w * 0.75;
-
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(w / 2, y), width: textW, height: 36),
-        const Radius.circular(18),
-      ),
-      Paint()..color = const Color(0xDD000000).withAlpha((alpha * 0xDD).round()),
-    );
-
-    _drawText(
-      canvas,
-      _message,
-      Offset((w - textW) / 2 + _padding, y - 10),
-      Colors.white.withAlpha((alpha * 255).round()),
-      fontSize: 14,
-    );
-  }
-
-  void _renderWaveCountdown(Canvas canvas) {
-    if (_countdown <= 0) return;
-    final w = size.x;
-    final secs = _countdown.ceil();
-    _drawText(
-      canvas,
-      'Next wave in $secs s',
-      Offset(w / 2 - 65, size.y - GameConstants.buildPanelHeight - 40),
-      const Color(0xFFFFEB3B),
-      fontSize: 16,
-      bold: true,
-    );
-  }
-
-  void _renderGameEnd(Canvas canvas) {
-    final w = size.x;
-    final h = size.y;
-
-    canvas.drawRect(Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xCC000000));
-
-    final panelW = w * 0.8;
-    final panelH = h * 0.4;
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(
-        Rect.fromCenter(center: Offset(w / 2, h / 2), width: panelW, height: panelH),
-        const Radius.circular(16),
-      ),
-      _panelPaint,
-    );
-
-    final titleColor = _isVictory ? const Color(0xFF4CAF50) : const Color(0xFFF44336);
-    final title = _isVictory ? 'YOU WIN! 🎉' : 'GAME OVER';
-    _drawText(canvas, title, Offset(w / 2 - 70, h / 2 - 70), titleColor, fontSize: 26, bold: true);
-    _drawText(canvas, 'Score: $_finalScore', Offset(w / 2 - 50, h / 2 - 20), Colors.white, fontSize: 20);
-    _drawText(canvas, 'Tap Play Again to restart', Offset(w / 2 - 100, h / 2 + 30), Colors.white54, fontSize: 13);
-  }
-
-  void _drawText(
-    Canvas canvas,
-    String text,
-    Offset position,
-    Color color, {
-    double fontSize = 14,
-    bool bold = false,
-  }) {
-    _textPainter
-      ..text = TextSpan(
-        text: text,
-        style: TextStyle(
-          color: color,
-          fontSize: fontSize,
-          fontWeight: bold ? FontWeight.bold : FontWeight.normal,
-          shadows: const [Shadow(blurRadius: 4, color: Color(0xFF000000))],
-        ),
-      )
-      ..layout();
-    _textPainter.paint(canvas, position);
+    _toastText.text = msg;
+    _toastTimer = _toastDuration;
   }
 }

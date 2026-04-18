@@ -69,10 +69,17 @@ class _GameScreenState extends State<GameScreen> {
                 onMainMenu: () =>
                     Navigator.of(context).popUntil((route) => route.isFirst),
               ),
-          'restartButton': (context, game) => _RestartOverlay(
-                onRestart: _restartGame,
-                onMainMenu: () =>
-                    Navigator.of(context).popUntil((route) => route.isFirst),
+          'restartButton': (context, game) => _GameEndOverlay(
+                isVictory: game.isVictory,
+                score: game.score,
+                onRestart: () {
+                  AudioService.instance.playSfx(SoundType.sfxButtonClick);
+                  _restartGame();
+                },
+                onMainMenu: () {
+                  AudioService.instance.playSfx(SoundType.sfxButtonClick);
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                },
               ),
         },
       ),
@@ -277,7 +284,7 @@ class PauseMenuOverlay extends StatelessWidget {
                 ),
               ),
               const SizedBox(height: 24),
-              _PauseMenuButton(
+              _MenuButton(
                 label: 'RESUME',
                 icon: Icons.play_arrow,
                 color: const Color(0xFF00BCD4),
@@ -288,7 +295,7 @@ class PauseMenuOverlay extends StatelessWidget {
                 },
               ),
               const SizedBox(height: 12),
-              _PauseMenuButton(
+              _MenuButton(
                 label: 'RESTART',
                 icon: Icons.refresh,
                 color: const Color(0xFFFF9800),
@@ -298,7 +305,7 @@ class PauseMenuOverlay extends StatelessWidget {
                 },
               ),
               const SizedBox(height: 12),
-              _PauseMenuButton(
+              _MenuButton(
                 label: 'MAIN MENU',
                 icon: Icons.home,
                 color: const Color(0xFF546E7A),
@@ -315,8 +322,81 @@ class PauseMenuOverlay extends StatelessWidget {
   }
 }
 
-class _PauseMenuButton extends StatelessWidget {
-  const _PauseMenuButton({
+// ── Game-end overlay (victory or defeat) ─────────────────────────────────────
+
+class _GameEndOverlay extends StatelessWidget {
+  const _GameEndOverlay({
+    required this.isVictory,
+    required this.score,
+    required this.onRestart,
+    required this.onMainMenu,
+  });
+
+  final bool isVictory;
+  final int score;
+  final VoidCallback onRestart;
+  final VoidCallback onMainMenu;
+
+  @override
+  Widget build(BuildContext context) {
+    final accentColor =
+        isVictory ? const Color(0xFF4CAF50) : const Color(0xFFF44336);
+    final title = isVictory ? 'YOU WIN!' : 'GAME OVER';
+
+    return Container(
+      color: const Color(0xCC000000),
+      child: Center(
+        child: Container(
+          width: 280,
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 28),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D0D1A),
+            border: Border.all(color: accentColor.withAlpha(120)),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                title,
+                style: TextStyle(
+                  color: accentColor,
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 3,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Score: $score',
+                style: const TextStyle(color: Colors.white, fontSize: 20),
+              ),
+              const SizedBox(height: 24),
+              _MenuButton(
+                label: 'PLAY AGAIN',
+                icon: Icons.refresh,
+                color: const Color(0xFF00BCD4),
+                onPressed: onRestart,
+              ),
+              const SizedBox(height: 12),
+              _MenuButton(
+                label: 'MAIN MENU',
+                icon: Icons.home,
+                color: const Color(0xFF546E7A),
+                onPressed: onMainMenu,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Shared button widget ────────────────────────────────────────────────────────
+
+class _MenuButton extends StatelessWidget {
+  const _MenuButton({
     required this.label,
     required this.icon,
     required this.color,
@@ -341,54 +421,9 @@ class _PauseMenuButton extends StatelessWidget {
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
         ),
         icon: Icon(icon, size: 18),
-        label: Text(label, style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
+        label: Text(label,
+            style: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 1)),
         onPressed: onPressed,
-      ),
-    );
-  }
-}
-
-// ── Game-over / victory restart overlay ────────────────────────────────────────
-
-class _RestartOverlay extends StatelessWidget {
-  const _RestartOverlay({required this.onRestart, required this.onMainMenu});
-
-  final VoidCallback onRestart;
-  final VoidCallback onMainMenu;
-
-  @override
-  Widget build(BuildContext context) {
-    return Align(
-      alignment: Alignment.bottomCenter,
-      child: Padding(
-        padding: const EdgeInsets.only(bottom: 40),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF00BCD4),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 14),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(30)),
-              ),
-              icon: const Icon(Icons.refresh),
-              label: const Text('Play Again', style: TextStyle(fontSize: 18)),
-              onPressed: () {
-                AudioService.instance.playSfx(SoundType.sfxButtonClick);
-                onRestart();
-              },
-            ),
-            const SizedBox(height: 12),
-            TextButton(
-              onPressed: () {
-                AudioService.instance.playSfx(SoundType.sfxButtonClick);
-                onMainMenu();
-              },
-              child: const Text('Main Menu', style: TextStyle(color: Colors.white54, fontSize: 14)),
-            ),
-          ],
-        ),
       ),
     );
   }
