@@ -24,7 +24,6 @@ class MapComponent extends PositionComponent with HasGameReference {
   late Paint _pathPaint;
   late Paint _pathBorderPaint;
   late Paint _blockedPaint;
-  final Paint _towerTilePaint = Paint()..color = const Color(0xFF37474F);
   late Paint _entryExitPaint;
 
   final Random _rng = Random(42);
@@ -113,8 +112,8 @@ class MapComponent extends PositionComponent with HasGameReference {
       case TileType.blocked:
         _drawBlockedTile(canvas, rect);
       case TileType.tower:
+        // Draw grass only — the tower sprite handles its own visual.
         _drawGrassTile(canvas, rect, col, row);
-        canvas.drawRect(rect, _towerTilePaint);
     }
   }
 

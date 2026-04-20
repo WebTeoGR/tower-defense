@@ -18,8 +18,7 @@ class TowerComponent extends PositionComponent
     required double tileSize,
     required this.towerType,
   }) {
-    // Cannon gets a larger footprint than the canvas-drawn towers.
-    final scale = towerType == TowerType.basic ? 1.1 : 0.8;
+    final scale = towerType == TowerType.basic ? 1.7 : 0.8;
     size = Vector2.all(tileSize * scale);
     position = Vector2(
       (gridCol * tileSize) + (tileSize - size.x) / 2,
@@ -89,8 +88,6 @@ class TowerComponent extends PositionComponent
     _spriteComp = SpriteAnimationComponent(
       animation: _idleAnim,
       size: size.clone(),
-      anchor: Anchor.center,
-      position: size / 2,
     );
     add(_spriteComp!);
   }

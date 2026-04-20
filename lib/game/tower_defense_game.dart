@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:flame/components.dart' show Anchor;
 import 'package:flame/events.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
@@ -57,6 +58,9 @@ class TowerDefenseGame extends FlameGame with TapCallbacks {
   Future<void> onLoad() async {
     gold = currentStage.startingGold;
     lives = currentStage.startingLives;
+
+    // World (0,0) must map to the top-left of the screen, not the center.
+    camera.viewfinder.anchor = Anchor.topLeft;
 
     // Game entities live in the Flame-managed World.
     _mapComponent = MapComponent(stage: currentStage);
